@@ -1,0 +1,8 @@
+osmnx>=2.0
+trimesh>=4.0
+shapely>=2.0
+numpy
+pillow
+requests
+pyproj
+mapbox-earcut
