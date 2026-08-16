@@ -1,0 +1,68 @@
+name: Build city STL
+
+on:
+  workflow_dispatch:
+    inputs:
+      city:
+        description: "City (e.g. Seattle, WA)"
+        required: true
+        default: "Seattle, WA"
+      x_km:
+        description: "Width in km"
+        required: true
+        default: "4"
+      y_km:
+        description: "Height in km"
+        required: true
+        default: "3"
+      width_mm:
+        description: "Printed width in mm"
+        required: true
+        default: "150"
+      z_exag:
+        description: "Vertical exaggeration"
+        required: false
+        default: "2.0"
+      dem_zoom:
+        description: "Terrain detail (12–15)"
+        required: false
+        default: "13"
+      no_buildings:
+        description: "Terrain only"
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Build STL
+        run: |
+          NAME=$(echo "${{ inputs.city }}" | tr -cs '[:alnum:]' '_' | sed 's/_$//')
+          echo "NAME=$NAME" >> "$GITHUB_ENV"
+          EXTRA=""
+          if [ "${{ inputs.no_buildings }}" = "true" ]; then EXTRA="--no-buildings"; fi
+          python city_stl.py "${{ inputs.city }}" \
+            --x-km ${{ inputs.x_km }} \
+            --y-km ${{ inputs.y_km }} \
+            --width-mm ${{ inputs.width_mm }} \
+            --z-exag ${{ inputs.z_exag }} \
+            --dem-zoom ${{ inputs.dem_zoom }} \
+            $EXTRA \
+            -o "${NAME}.stl"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}-stl
+          path: "*.stl"
+          retention-days: 30
