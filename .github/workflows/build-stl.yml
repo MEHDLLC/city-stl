@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       city:
-        description: "City (e.g. Seattle, WA)"
+        description: "Place name, ZIP code, or lat,lon (e.g. Seattle, WA / 10001 / 40.7484, -73.9857)"
         required: true
         default: "Seattle, WA"
       x_km:
