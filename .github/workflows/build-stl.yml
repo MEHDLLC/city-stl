@@ -1,0 +1,85 @@
+name: Build city STL
+
+on:
+  workflow_dispatch:
+    inputs:
+      city:
+        description: "Place name, ZIP code, or lat,lon (e.g. Seattle, WA / 10001 / 40.7484, -73.9857)"
+        required: true
+        default: "Seattle, WA"
+      x_km:
+        description: "Width in km"
+        required: true
+        default: "4"
+      y_km:
+        description: "Height in km"
+        required: true
+        default: "3"
+      width_mm:
+        description: "Total printed width in mm (all tiles side by side)"
+        required: true
+        default: "150"
+      tiles:
+        description: "Split into COLSxROWS tiles (1x1 = single piece)"
+        required: false
+        default: "1x1"
+      z_exag:
+        description: "Vertical exaggeration"
+        required: false
+        default: "2.0"
+      dem_zoom:
+        description: "Terrain detail (12â€“15)"
+        required: false
+        default: "13"
+      min_area:
+        description: "Skip buildings smaller than (mÂ²)"
+        required: false
+        default: "20"
+      default_levels:
+        description: "Floors to assume when OSM has no height"
+        required: false
+        default: "2"
+      no_buildings:
+        description: "Terrain only"
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Build STL
+        run: |
+          NAME=$(echo "${{ inputs.city }}" | tr -cs '[:alnum:]' '_' | sed 's/_$//')
+          echo "NAME=$NAME" >> "$GITHUB_ENV"
+          EXTRA=""
+          if [ "${{ inputs.no_buildings }}" = "true" ]; then EXTRA="--no-buildings"; fi
+          python city_stl.py "${{ inputs.city }}" \
+            --x-km ${{ inputs.x_km }} \
+            --y-km ${{ inputs.y_km }} \
+            --width-mm ${{ inputs.width_mm }} \
+            --z-exag ${{ inputs.z_exag }} \
+            --dem-zoom ${{ inputs.dem_zoom }} \
+            --tiles ${{ inputs.tiles }} \
+            --min-area ${{ inputs.min_area }} \
+            --default-levels ${{ inputs.default_levels }} \
+            $EXTRA \
+            -o "${NAME}.stl"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}-stl
+          path: |
+            *.stl
+            *_layout.txt
+          retention-days: 30
