@@ -12,6 +12,7 @@ Options:
     --min-area 20       ignore building footprints smaller than this (m²)
     --dem-zoom 13       terrain tile zoom (12≈38m/px, 13≈19m/px, 14≈10m/px, 15≈5m/px)
     --no-buildings      terrain only
+    --sea-level 0       elevations below this (m) are flattened to it (hides seafloor data)
 
 Data: OpenStreetMap (buildings, via osmnx) and AWS Terrain Tiles (elevation, no key needed).
 Install: pip install osmnx trimesh shapely numpy pillow requests mapbox-earcut
@@ -103,6 +104,164 @@ def terrain_mesh(dem, xs, ys, base_z):
     def wall(line, flip):
         f = []
         for i in range(len(line) - 1):
+            p, q = line[i], line[i + 1]
+            t1, t2 = (p, q, q + off), (p, q + off, p + off)
+            if flip:
+                t1, t2 = t1[::-1], t2[::-1]
+            f += [t1, t2]
+        return np.array(f)
+
+    faces.append(wall(idx[0, :], True))          # south edge (y min)
+    faces.append(wall(idx[-1, :], False))        # north edge
+    faces.append(wall(idx[:, 0], False))         # west edge
+    faces.append(wall(idx[:, -1], True))         # east edge
+    m = trimesh.Trimesh(vertices=verts, faces=np.vstack(faces), process=True)
+    m.fix_normals()
+    return m
+
+
+# ----------------------------------------------------------------------------- buildings
+def building_height(row, default_levels):
+    for key in ("height", "building:height"):
+        v = row.get(key)
+        if isinstance(v, str):
+            try:
+                return float(v.split()[0].replace("m", ""))
+            except ValueError:
+                pass
+        elif isinstance(v, (int, float)) and not np.isnan(v):
+            return float(v)
+    lv = row.get("building:levels")
+    try:
+        lv = float(lv)
+        if not np.isnan(lv):
+            return lv * 3.2 + 1.0
+    except (TypeError, ValueError):
+        pass
+    return default_levels * 3.2 + 1.0
+
+
+def fetch_buildings(bbox_wgs, epsg, clip_box, default_levels, min_area):
+    west, south, east, north = bbox_wgs
+    print("  fetching OSM buildings...")
+    try:
+        gdf = ox.features_from_bbox((west, south, east, north), tags={"building": True})
+    except Exception as e:
+        print(f"  no buildings returned ({e})")
+        return []
+    gdf = gdf[gdf.geometry.type.isin(["Polygon", "MultiPolygon"])]
+    gdf = gdf.to_crs(epsg=epsg)
+    out = []
+    for _, row in gdf.iterrows():
+        geom = row.geometry.intersection(clip_box)
+        if geom.is_empty:
+            continue
+        h = building_height(row, default_levels)
+        polys = list(geom.geoms) if isinstance(geom, MultiPolygon) else [geom]
+        for p in polys:
+            if isinstance(p, Polygon) and p.area >= min_area:
+                out.append((p, h))
+    print(f"  {len(out)} building footprints kept")
+    return out
+
+
+def sample_dem(dem, xs, ys, px, py):
+    j = np.clip(np.searchsorted(xs, px), 0, len(xs) - 1)
+    i = np.clip(np.searchsorted(ys, py), 0, len(ys) - 1)
+    return dem[i, j]
+
+
+def buildings_mesh(bldgs, dem, xs, ys, z_exag, floor_z):
+    meshes = []
+    for poly, h in bldgs:
+        try:
+            m = trimesh.creation.extrude_polygon(poly.simplify(0.5), height=h)
+        except Exception:
+            continue
+        # sit the building on the terrain (min ground under footprint, minus a little
+        # so it sinks in rather than floats)
+        cx, cy = poly.centroid.x, poly.centroid.y
+        gz = sample_dem(dem, xs, ys, cx, cy) * z_exag
+        m.apply_translation([0, 0, gz - 2.0])
+        meshes.append(m)
+    return meshes
+
+
+# ----------------------------------------------------------------------------- main
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("city")
+    ap.add_argument("--x-km", type=float, required=True)
+    ap.add_argument("--y-km", type=float, required=True)
+    ap.add_argument("--width-mm", type=float, required=True, help="printed size along X")
+    ap.add_argument("-o", "--output", default="city.stl")
+    ap.add_argument("--z-exag", type=float, default=2.0)
+    ap.add_argument("--base-mm", type=float, default=3.0)
+    ap.add_argument("--default-levels", type=float, default=2)
+    ap.add_argument("--min-area", type=float, default=20)
+    ap.add_argument("--dem-zoom", type=int, default=13)
+    ap.add_argument("--no-buildings", action="store_true")
+    ap.add_argument("--sea-level", type=float, default=0.0,
+                    help="clamp elevations below this (m) — flattens ocean/bathymetry")
+    a = ap.parse_args()
+
+    # 1. geocode & bbox
+    print(f"Geocoding '{a.city}'...")
+    lat, lon = ox.geocode(a.city)
+    epsg = utm_epsg(lat, lon)
+    to_utm = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+    to_wgs = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+    cx, cy = to_utm.transform(lon, lat)
+    hx, hy = a.x_km * 500, a.y_km * 500
+    xmin, xmax, ymin, ymax = cx - hx, cx + hx, cy - hy, cy + hy
+    west, south = to_wgs.transform(xmin, ymin)
+    east, north = to_wgs.transform(xmax, ymax)
+    print(f"  center {lat:.4f},{lon:.4f}  bbox {a.x_km}x{a.y_km} km  UTM EPSG:{epsg}")
+
+    # 2. terrain
+    dem_ll, lons, lats = fetch_dem(west, south, east, north, a.dem_zoom)
+    # resample onto a regular metric grid
+    res = (xmax - xmin) / max(dem_ll.shape[1] - 1, 1)
+    xs = np.arange(xmin, xmax + res / 2, res)
+    ys = np.arange(ymin, ymax + res / 2, res)
+    dem = np.empty((len(ys), len(xs)), dtype=np.float32)
+    for i, y in enumerate(ys):
+        rl = [to_wgs.transform(x, y) for x in xs]
+        li = np.clip(np.searchsorted(lons, [p[0] for p in rl]), 0, len(lons) - 1)
+        lj = np.clip(np.searchsorted(-lats, [-p[1] for p in rl]), 0, len(lats) - 1)  # lats descend
+        dem[i] = dem_ll[lj, li]
+    dem = np.nan_to_num(dem, nan=0.0)
+    dem = np.maximum(dem, a.sea_level)          # flatten water / bathymetry
+    dem_z = dem * a.z_exag
+    print(f"  terrain grid {dem.shape}, elev {dem.min():.0f}–{dem.max():.0f} m")
+
+    scale = a.width_mm / (a.x_km * 1000)               # mm per metre
+    base_z = dem_z.min() - a.base_mm / scale           # base thickness in real metres
+    parts = [terrain_mesh(dem_z, xs, ys, base_z)]
+
+    # 3. buildings
+    if not a.no_buildings:
+        clip = box(xmin, ymin, xmax, ymax)
+        bldgs = fetch_buildings((west, south, east, north), epsg, clip, a.default_levels, a.min_area)
+        parts += buildings_mesh(bldgs, dem, xs, ys, a.z_exag, base_z)
+
+    # 4. merge, scale, export
+    print("  merging & scaling...")
+    mesh = trimesh.util.concatenate(parts)
+    mesh.apply_translation([-xmin, -ymin, -base_z])
+    mesh.apply_scale(scale)
+    mesh.export(a.output)
+    ext = mesh.bounds[1] - mesh.bounds[0]
+    print(f"Wrote {a.output}: {ext[0]:.1f} x {ext[1]:.1f} x {ext[2]:.1f} mm, "
+          f"{len(mesh.faces):,} triangles")
+    if not mesh.is_watertight:
+        print("  note: buildings overlap the terrain rather than being booleaned in — "
+              "slicers handle this fine, but if yours complains, run a mesh repair "
+              "(e.g. Meshmixer 'Make Solid' or PrusaSlicer 'Fix through Netfabb').")
+
+
+if __name__ == "__main__":
+    sys.exit(main())        for i in range(len(line) - 1):
             p, q = line[i], line[i + 1]
             t1, t2 = (p, q, q + off), (p, q + off, p + off)
             if flip:
