@@ -1,0 +1,26 @@
+[
+  {
+    "name": "Statue of Liberty",
+    "lat": 40.6892, "lon": -74.0445,
+    "file": "statue_of_liberty.stl",
+    "height_m": 93,
+    "radius_m": 120,
+    "match_name": "Statue of Liberty"
+  },
+  {
+    "name": "Space Needle",
+    "lat": 47.6205, "lon": -122.3493,
+    "file": "space_needle.stl",
+    "height_m": 184,
+    "radius_m": 60,
+    "match_name": "Space Needle"
+  },
+  {
+    "name": "Salt Lake Temple",
+    "lat": 40.7707, "lon": -111.8919,
+    "file": "salt_lake_temple.stl",
+    "height_m": 68,
+    "radius_m": 80,
+    "match_name": "Salt Lake Temple"
+  }
+]
