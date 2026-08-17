@@ -28,11 +28,11 @@ on:
         required: false
         default: "2.0"
       dem_zoom:
-        description: "Terrain detail (12â€“15)"
+        description: "Terrain detail (12–15)"
         required: false
         default: "13"
       min_area:
-        description: "Skip buildings smaller than (mÂ²)"
+        description: "Skip buildings smaller than (m²)"
         required: false
         default: "20"
       default_levels:
@@ -41,6 +41,10 @@ on:
         default: "2"
       no_buildings:
         description: "Terrain only"
+        type: boolean
+        default: false
+      scout:
+        description: "Scout only: list landmarks that deserve their own STL (no build)"
         type: boolean
         default: false
 
@@ -63,7 +67,8 @@ jobs:
           NAME=$(echo "${{ inputs.city }}" | tr -cs '[:alnum:]' '_' | sed 's/_$//')
           echo "NAME=$NAME" >> "$GITHUB_ENV"
           EXTRA=""
-          if [ "${{ inputs.no_buildings }}" = "true" ]; then EXTRA="--no-buildings"; fi
+          if [ "${{ inputs.no_buildings }}" = "true" ]; then EXTRA="$EXTRA --no-buildings"; fi
+          if [ "${{ inputs.scout }}" = "true" ]; then EXTRA="$EXTRA --scout"; fi
           python city_stl.py "${{ inputs.city }}" \
             --x-km ${{ inputs.x_km }} \
             --y-km ${{ inputs.y_km }} \
@@ -78,8 +83,10 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.NAME }}-stl
+          name: ${{ env.NAME }}-${{ inputs.scout && 'scout' || 'stl' }}
           path: |
             *.stl
+            *.png
             *_layout.txt
+            *_landmark_suggestions.*
           retention-days: 30
