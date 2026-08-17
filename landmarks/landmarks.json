@@ -5,7 +5,9 @@
     "file": "statue_of_liberty.stl",
     "height_m": 93,
     "radius_m": 120,
-    "match_name": "Statue of Liberty"
+    "match_name": "Statue of Liberty",
+    "rotation_deg": 0,
+    "rotate_x_deg": 0
   },
   {
     "name": "Space Needle",
